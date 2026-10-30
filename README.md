@@ -45,7 +45,14 @@ permissions and rule text stay as they are.
 
 ## Install
 
-Copy the skill folder into your user skills:
+```bash
+npx skills add undefined-ui/cache-tune -g
+```
+
+This uses the [skills](https://github.com/vercel-labs/skills) CLI (needs Node.js) and installs the skill for
+your user. Leave out `-g` to install it into the current project only. Restart Claude Code.
+
+Without Node.js, copy the skill folder into your user skills:
 
 ```bash
 git clone https://github.com/undefined-ui/cache-tune
@@ -57,8 +64,6 @@ Or into one project:
 ```bash
 cp -r cache-tune/skills/cache-tune <your-project>/.claude/skills/
 ```
-
-Restart Claude Code.
 
 ## Use
 
