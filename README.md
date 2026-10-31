@@ -30,14 +30,26 @@ means cover 9 runs and the "after" means cover 10.
 
 What changed:
 
-1. Review rules and project notes moved from a dated CLAUDE.md into a byte-stable system prompt.
-2. Branch and date moved after the diff.
-3. Tools cut from 16 to Read/Grep/Glob/Bash, with no MCP connectors, skills or subagents. About 11k
-   tokens of skill listings, agent listings and connector tools had been sitting after the diff and were
-   written to cache again on every run.
-4. No final summary; findings use a fixed format (severity, file:line, fix).
+1. The project notes moved from a CLAUDE.md that also held the date and branch into a byte-stable system
+   prompt file (`--append-system-prompt-file`), together with the review instructions.
+2. Branch and date moved out of CLAUDE.md into the prompt, just before the diff.
+3. Tools cut from 14, plus 39 more tool names listed after the diff (16 built-in, 23 from claude.ai
+   connectors), to Read/Grep/Glob/Bash, with no MCP connectors, skills or subagents. About 11k tokens of
+   skill listings, agent listings and connector tools had been sitting after the diff and were written to
+   cache again on every run.
+4. The instructions changed from "find bugs and risks, then write a summary" to findings only, in a fixed
+   format (severity, file:line, what, why, fix), with no summary. They also say that the diff is not
+   applied, that files must not be modified, and that independent reads should go out in parallel.
 
-Moving date and branch alone saved little. The changes were not tested one by one.
+The changes were not tested one by one, so their separate effects are estimates; moving the date and
+branch probably saved little on its own.
+
+The scripts, both prompts, the 5 diffs and the raw `claude -p` output of every run, including the
+excluded ones, are in [benchmarks/fastapi-review](benchmarks/fastapi-review). You can rebuild the table
+from the raw files with one command, or run the whole test again. The report as the original session
+printed it:
+
+![Report from the original session](benchmarks/fastapi-review/screenshot.png)
 
 ## What the skill does
 

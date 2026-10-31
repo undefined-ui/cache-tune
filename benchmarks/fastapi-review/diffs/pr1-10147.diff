@@ -1,0 +1,438 @@
+diff --git a/fastapi/security/api_key.py b/fastapi/security/api_key.py
+index 22525868..587b8689 100644
+--- a/fastapi/security/api_key.py
++++ b/fastapi/security/api_key.py
+@@ -4,7 +4,7 @@ from annotated_doc import Doc
+ from fastapi.openapi.models import APIKey, APIKeyIn
+ from fastapi.security.base import SecurityBase
+ from starlette.exceptions import HTTPException
+-from starlette.requests import Request
++from starlette.requests import HTTPConnection
+ from starlette.status import HTTP_401_UNAUTHORIZED
+ 
+ 
+@@ -21,7 +21,7 @@ class APIKeyBase(SecurityBase):
+     ):
+         self.auto_error = auto_error
+ 
+-        self.model: APIKey = APIKey(
++        self.model = APIKey(
+             **{"in": location},
+             name=name,
+             description=description,
+@@ -139,7 +139,7 @@ class APIKeyQuery(APIKeyBase):
+             auto_error=auto_error,
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         api_key = request.query_params.get(self.model.name)
+         return self.check_api_key(api_key)
+ 
+@@ -227,7 +227,7 @@ class APIKeyHeader(APIKeyBase):
+             auto_error=auto_error,
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         api_key = request.headers.get(self.model.name)
+         return self.check_api_key(api_key)
+ 
+@@ -315,6 +315,6 @@ class APIKeyCookie(APIKeyBase):
+             auto_error=auto_error,
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         api_key = request.cookies.get(self.model.name)
+         return self.check_api_key(api_key)
+diff --git a/fastapi/security/http.py b/fastapi/security/http.py
+index a32948ef..d1cfa907 100644
+--- a/fastapi/security/http.py
++++ b/fastapi/security/http.py
+@@ -9,7 +9,7 @@ from fastapi.openapi.models import HTTPBearer as HTTPBearerModel
+ from fastapi.security.base import SecurityBase
+ from fastapi.security.utils import get_authorization_scheme_param
+ from pydantic import BaseModel
+-from starlette.requests import Request
++from starlette.requests import HTTPConnection
+ from starlette.status import HTTP_401_UNAUTHORIZED
+ 
+ 
+@@ -91,7 +91,9 @@ class HTTPBase(SecurityBase):
+             headers=self.make_authenticate_headers(),
+         )
+ 
+-    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None:
++    async def __call__(
++        self, request: HTTPConnection
++    ) -> HTTPAuthorizationCredentials | None:
+         authorization = request.headers.get("Authorization")
+         scheme, credentials = get_authorization_scheme_param(authorization)
+         if not (authorization and scheme and credentials):
+@@ -200,7 +202,7 @@ class HTTPBasic(HTTPBase):
+         return {"WWW-Authenticate": "Basic"}
+ 
+     async def __call__(  # type: ignore
+-        self, request: Request
++        self, request: HTTPConnection
+     ) -> HTTPBasicCredentials | None:
+         authorization = request.headers.get("Authorization")
+         scheme, param = get_authorization_scheme_param(authorization)
+@@ -300,7 +302,9 @@ class HTTPBearer(HTTPBase):
+         self.scheme_name = scheme_name or self.__class__.__name__
+         self.auto_error = auto_error
+ 
+-    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None:
++    async def __call__(
++        self, request: HTTPConnection
++    ) -> HTTPAuthorizationCredentials | None:
+         authorization = request.headers.get("Authorization")
+         scheme, credentials = get_authorization_scheme_param(authorization)
+         if not (authorization and scheme and credentials):
+@@ -401,7 +405,9 @@ class HTTPDigest(HTTPBase):
+         self.scheme_name = scheme_name or self.__class__.__name__
+         self.auto_error = auto_error
+ 
+-    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None:
++    async def __call__(
++        self, request: HTTPConnection
++    ) -> HTTPAuthorizationCredentials | None:
+         authorization = request.headers.get("Authorization")
+         scheme, credentials = get_authorization_scheme_param(authorization)
+         if not (authorization and scheme and credentials):
+diff --git a/fastapi/security/oauth2.py b/fastapi/security/oauth2.py
+index 3fd9e41e..29339222 100644
+--- a/fastapi/security/oauth2.py
++++ b/fastapi/security/oauth2.py
+@@ -7,7 +7,7 @@ from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
+ from fastapi.param_functions import Form
+ from fastapi.security.base import SecurityBase
+ from fastapi.security.utils import get_authorization_scheme_param
+-from starlette.requests import Request
++from starlette.requests import HTTPConnection
+ from starlette.status import HTTP_401_UNAUTHORIZED
+ 
+ 
+@@ -420,7 +420,7 @@ class OAuth2(SecurityBase):
+             headers={"WWW-Authenticate": "Bearer"},
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         authorization = request.headers.get("Authorization")
+         if not authorization:
+             if self.auto_error:
+@@ -533,7 +533,7 @@ class OAuth2PasswordBearer(OAuth2):
+             auto_error=auto_error,
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         authorization = request.headers.get("Authorization")
+         scheme, param = get_authorization_scheme_param(authorization)
+         if not authorization or scheme.lower() != "bearer":
+@@ -639,7 +639,7 @@ class OAuth2AuthorizationCodeBearer(OAuth2):
+             auto_error=auto_error,
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         authorization = request.headers.get("Authorization")
+         scheme, param = get_authorization_scheme_param(authorization)
+         if not authorization or scheme.lower() != "bearer":
+diff --git a/fastapi/security/open_id_connect_url.py b/fastapi/security/open_id_connect_url.py
+index 125a8194..6bddd67e 100644
+--- a/fastapi/security/open_id_connect_url.py
++++ b/fastapi/security/open_id_connect_url.py
+@@ -4,7 +4,7 @@ from annotated_doc import Doc
+ from fastapi.openapi.models import OpenIdConnect as OpenIdConnectModel
+ from fastapi.security.base import SecurityBase
+ from starlette.exceptions import HTTPException
+-from starlette.requests import Request
++from starlette.requests import HTTPConnection
+ from starlette.status import HTTP_401_UNAUTHORIZED
+ 
+ 
+@@ -84,7 +84,7 @@ class OpenIdConnect(SecurityBase):
+             headers={"WWW-Authenticate": "Bearer"},
+         )
+ 
+-    async def __call__(self, request: Request) -> str | None:
++    async def __call__(self, request: HTTPConnection) -> str | None:
+         authorization = request.headers.get("Authorization")
+         if not authorization:
+             if self.auto_error:
+diff --git a/tests/test_security_http_base_optional.py b/tests/test_security_http_base_optional.py
+index 1d1944ab..eae7bc0e 100644
+--- a/tests/test_security_http_base_optional.py
++++ b/tests/test_security_http_base_optional.py
+@@ -1,4 +1,4 @@
+-from fastapi import FastAPI, Security
++from fastapi import FastAPI, Security, WebSocket
+ from fastapi.security.http import HTTPAuthorizationCredentials, HTTPBase
+ from fastapi.testclient import TestClient
+ from inline_snapshot import snapshot
+@@ -17,6 +17,19 @@ def read_current_user(
+     return {"scheme": credentials.scheme, "credentials": credentials.credentials}
+ 
+ 
++@app.websocket("/users/timeline")
++async def read_user_timeline(
++    websocket: WebSocket,
++    credentials: HTTPAuthorizationCredentials | None = Security(security),
++):
++    await websocket.accept()
++    await websocket.send_json(
++        {"scheme": credentials.scheme, "credentials": credentials.credentials}
++        if credentials
++        else {"msg": "Create an account first"}
++    )
++
++
+ client = TestClient(app)
+ 
+ 
+@@ -32,6 +45,20 @@ def test_security_http_base_no_credentials():
+     assert response.json() == {"msg": "Create an account first"}
+ 
+ 
++def test_security_http_base_with_ws():
++    with client.websocket_connect(
++        "/users/timeline", headers={"Authorization": "Other foobar"}
++    ) as websocket:
++        data = websocket.receive_json()
++        assert data == {"scheme": "Other", "credentials": "foobar"}
++
++
++def test_security_http_base_with_ws_no_credentials():
++    with client.websocket_connect("/users/timeline") as websocket:
++        data = websocket.receive_json()
++        assert data == {"msg": "Create an account first"}
++
++
+ def test_openapi_schema():
+     response = client.get("/openapi.json")
+     assert response.status_code == 200, response.text
+diff --git a/tests/test_security_http_bearer.py b/tests/test_security_http_bearer.py
+index eb94ddc3..9045c16a 100644
+--- a/tests/test_security_http_bearer.py
++++ b/tests/test_security_http_bearer.py
+@@ -1,4 +1,5 @@
+-from fastapi import FastAPI, Security
++from fastapi import FastAPI, Security, WebSocket
++from fastapi.requests import HTTPConnection
+ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+ from fastapi.testclient import TestClient
+ from inline_snapshot import snapshot
+@@ -36,6 +37,43 @@ def test_security_http_bearer_incorrect_scheme_credentials():
+     assert response.headers["WWW-Authenticate"] == "Bearer"
+ 
+ 
++def test_security_http_bearer_subclass_request_keyword():
++    class CustomHTTPBearer(HTTPBearer):
++        async def __call__(
++            self, request: HTTPConnection
++        ) -> HTTPAuthorizationCredentials | None:
++            return await super().__call__(request=request)
++
++    subclass_app = FastAPI()
++    subclass_security = CustomHTTPBearer()
++
++    @subclass_app.get("/users/me")
++    async def read_user(
++        credentials: HTTPAuthorizationCredentials = Security(subclass_security),
++    ):
++        return credentials
++
++    @subclass_app.websocket("/users/me")
++    async def read_user_websocket(
++        websocket: WebSocket,
++        credentials: HTTPAuthorizationCredentials = Security(subclass_security),
++    ):
++        await websocket.accept()
++        await websocket.send_json(credentials.model_dump())
++        await websocket.close()
++
++    subclass_client = TestClient(subclass_app)
++    headers = {"Authorization": "Bearer foobar"}
++    expected = {"scheme": "Bearer", "credentials": "foobar"}
++
++    response = subclass_client.get("/users/me", headers=headers)
++    assert response.status_code == 200, response.text
++    assert response.json() == expected
++
++    with subclass_client.websocket_connect("/users/me", headers=headers) as websocket:
++        assert websocket.receive_json() == expected
++
++
+ def test_openapi_schema():
+     response = client.get("/openapi.json")
+     assert response.status_code == 200, response.text
+diff --git a/tests/test_security_websockets.py b/tests/test_security_websockets.py
+new file mode 100644
+index 00000000..66560562
+--- /dev/null
++++ b/tests/test_security_websockets.py
+@@ -0,0 +1,161 @@
++from functools import partial
++
++import pytest
++from fastapi import FastAPI, Security, WebSocket
++from fastapi.encoders import jsonable_encoder
++from fastapi.security import (
++    APIKeyCookie,
++    APIKeyHeader,
++    APIKeyQuery,
++    HTTPBasic,
++    HTTPBearer,
++    HTTPDigest,
++    OAuth2,
++    OAuth2AuthorizationCodeBearer,
++    OAuth2PasswordBearer,
++    OpenIdConnect,
++)
++from fastapi.security.http import HTTPBase
++from fastapi.testclient import TestClient
++from starlette.testclient import WebSocketDenialResponse
++
++
++@pytest.mark.parametrize(
++    "security_factory, path, headers, expected, challenge",
++    [
++        pytest.param(
++            partial(HTTPBase, scheme="Other"),
++            "/",
++            {"Authorization": "Other secret"},
++            {"scheme": "Other", "credentials": "secret"},
++            "Other",
++            id="http-base",
++        ),
++        pytest.param(
++            HTTPBasic,
++            "/",
++            {"Authorization": "Basic am9objpzZWNyZXQ="},
++            {"username": "john", "password": "secret"},
++            "Basic",
++            id="http-basic",
++        ),
++        pytest.param(
++            HTTPBearer,
++            "/",
++            {"Authorization": "Bearer secret"},
++            {"scheme": "Bearer", "credentials": "secret"},
++            "Bearer",
++            id="http-bearer",
++        ),
++        pytest.param(
++            HTTPDigest,
++            "/",
++            {"Authorization": "Digest secret"},
++            {"scheme": "Digest", "credentials": "secret"},
++            "Digest",
++            id="http-digest",
++        ),
++        pytest.param(
++            partial(APIKeyQuery, name="key"),
++            "/?key=secret",
++            {},
++            "secret",
++            "APIKey",
++            id="api-key-query",
++        ),
++        pytest.param(
++            partial(APIKeyHeader, name="key"),
++            "/",
++            {"key": "secret"},
++            "secret",
++            "APIKey",
++            id="api-key-header",
++        ),
++        pytest.param(
++            partial(APIKeyCookie, name="key"),
++            "/",
++            {"Cookie": "key=secret"},
++            "secret",
++            "APIKey",
++            id="api-key-cookie",
++        ),
++        pytest.param(
++            OAuth2,
++            "/",
++            {"Authorization": "Bearer secret"},
++            "Bearer secret",
++            "Bearer",
++            id="oauth2",
++        ),
++        pytest.param(
++            partial(OAuth2PasswordBearer, tokenUrl="/token"),
++            "/",
++            {"Authorization": "Bearer secret"},
++            "secret",
++            "Bearer",
++            id="oauth2-password-bearer",
++        ),
++        pytest.param(
++            partial(
++                OAuth2AuthorizationCodeBearer,
++                authorizationUrl="/authorize",
++                tokenUrl="/token",
++            ),
++            "/",
++            {"Authorization": "Bearer secret"},
++            "secret",
++            "Bearer",
++            id="oauth2-authorization-code-bearer",
++        ),
++        pytest.param(
++            partial(OpenIdConnect, openIdConnectUrl="/openid"),
++            "/",
++            {"Authorization": "Bearer secret"},
++            "Bearer secret",
++            "Bearer",
++            id="openid-connect",
++        ),
++    ],
++)
++@pytest.mark.parametrize(
++    "auto_error, has_credentials",
++    [
++        pytest.param(True, True, id="valid-credentials"),
++        pytest.param(True, False, id="missing-required-credentials"),
++        pytest.param(False, False, id="missing-optional-credentials"),
++    ],
++)
++def test_security_websocket(
++    security_factory,
++    path: str,
++    headers: dict[str, str],
++    expected: dict[str, str] | str,
++    challenge: str,
++    auto_error: bool,
++    has_credentials: bool,
++):
++    security = security_factory(auto_error=auto_error)
++    app = FastAPI()
++
++    @app.websocket("/")
++    async def endpoint(websocket: WebSocket, credentials=Security(security)):
++        await websocket.accept()
++        await websocket.send_json(jsonable_encoder(credentials))
++        await websocket.close()
++
++    with TestClient(app) as client:
++        if auto_error and not has_credentials:
++            with pytest.raises(WebSocketDenialResponse) as exc_info:
++                with client.websocket_connect("/"):
++                    pass  # pragma: no cover
++            assert exc_info.value.status_code == 401
++            assert exc_info.value.json() == {"detail": "Not authenticated"}
++            assert exc_info.value.headers["WWW-Authenticate"] == challenge
++        else:
++            with client.websocket_connect(
++                path if has_credentials else "/",
++                headers=headers if has_credentials else {},
++            ) as websocket:
++                assert websocket.receive_json() == (
++                    expected if has_credentials else None
++                )

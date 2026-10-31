@@ -1,0 +1,517 @@
+diff --git a/docs/en/docs/release-notes.md b/docs/en/docs/release-notes.md
+index 84424113..bdce1403 100644
+--- a/docs/en/docs/release-notes.md
++++ b/docs/en/docs/release-notes.md
+@@ -7,6 +7,10 @@ hide:
+ 
+ ## Latest Changes
+ 
++JSON request bodies now distinguish an explicit `null` from an omitted value. For individual `Body` parameters, `null` is validated as `None`: nullable types accept it, and non-nullable types reject it even when a default is defined. Defaults and default factories apply only when the value is omitted. This applies both to parameters inside JSON objects and to parameters representing the entire body. Clients that used `null` to request a default should omit the value instead.
++
++When a JSON object is expected because of `Body(embed=True)` or multiple body parameters, sending `null` as the entire body now returns a validation error.
++
+ ## 0.150.0 (2026-10-20)
+ 
+ When no file is selected, browsers submit a file part with an empty filename and empty content. FastAPI now treats this as missing: required file fields return a validation error, and fields with defaults or default factories use them. Unselected inputs are ignored in lists of files. Named zero-byte files are still accepted.
+diff --git a/fastapi/dependencies/utils.py b/fastapi/dependencies/utils.py
+index 1fb9fd50..a89f52d7 100644
+--- a/fastapi/dependencies/utils.py
++++ b/fastapi/dependencies/utils.py
+@@ -587,7 +587,7 @@ async def solve_dependencies(
+     *,
+     request: Request | WebSocket,
+     dependant: Dependant,
+-    body: dict[str, Any] | FormData | bytes | None = None,
++    body: Any = Undefined,
+     background_tasks: StarletteBackgroundTasks | None = None,
+     response: Response | None = None,
+     dependency_overrides_provider: Any | None = None,
+@@ -734,7 +734,7 @@ async def solve_dependencies(
+ def _validate_value_with_model_field(
+     *, field: ModelField, value: Any, values: dict[str, Any], loc: tuple[str, ...]
+ ) -> tuple[Any, list[Any]]:
+-    if value is None:
++    if value is Undefined:
+         if field.field_info.is_required():
+             return None, [get_missing_field_error(loc=loc)]
+         value = deepcopy(field.default)
+@@ -780,7 +780,7 @@ def _get_multidict_value(
+         )
+     ):
+         # Apply defaults during validation, not while extracting request data.
+-        return None
++        return Undefined
+     return value
+ 
+ 
+@@ -826,7 +826,7 @@ def request_params_to_args(
+                 if alias == field.name:
+                     alias = alias.replace("_", "-")
+         value = _get_multidict_value(field, received_params, alias=alias)
+-        if value is not None:
++        if value is not Undefined:
+             params_to_process[get_validation_alias(field)] = value
+         processed_keys.add(alias or get_validation_alias(field))
+         # For headers with convert_underscores=True, mark both the converted
+@@ -950,7 +950,10 @@ async def _extract_form_body(
+         if field.config is None or infer_false_if_missing:
+             selected_alias = aliases[0]
+             for alias in aliases:
+-                if _get_multidict_value(field, received_body, alias=alias) is not None:
++                if (
++                    _get_multidict_value(field, received_body, alias=alias)
++                    is not Undefined
++                ):
+                     selected_alias = alias
+                     break
+             aliases = [selected_alias]
+@@ -985,7 +988,7 @@ async def _extract_form_body(
+                 # Individual parameters are later looked up by their declared alias.
+                 alias = get_validation_alias(field)
+                 field_aliases.add(alias)
+-            if value is not None:
++            if value is not Undefined:
+                 values[alias] = value
+     for key in received_body.keys():
+         if key not in field_aliases:
+@@ -999,7 +1002,7 @@ async def _extract_form_body(
+ 
+ async def request_body_to_args(
+     body_fields: list[ModelField],
+-    received_body: dict[str, Any] | FormData | bytes | None,
++    received_body: Any,
+     embed_body_fields: bool,
+ ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+     values: dict[str, Any] = {}
+@@ -1029,11 +1032,11 @@ async def request_body_to_args(
+         return {first_field.name: v_}, errors_
+     for field in body_fields:
+         loc = ("body", get_validation_alias(field))
+-        value: Any | None = None
+-        if body_to_process is not None and not isinstance(body_to_process, bytes):
++        value: Any = Undefined
++        if body_to_process is not Undefined and not isinstance(body_to_process, bytes):
+             try:
+-                value = body_to_process.get(get_validation_alias(field))
+-            # If the received body is a list, not a dict
++                value = body_to_process.get(get_validation_alias(field), Undefined)
++            # Embedded fields require an object, not a list, scalar, or null.
+             except AttributeError:
+                 errors.append(get_missing_field_error(loc))
+                 continue
+diff --git a/fastapi/routing.py b/fastapi/routing.py
+index f6a2d8c2..a3f8043c 100644
+--- a/fastapi/routing.py
++++ b/fastapi/routing.py
+@@ -100,7 +100,7 @@ from starlette import routing
+ from starlette._exception_handler import wrap_app_handling_exceptions
+ from starlette._utils import get_route_path, is_async_callable
+ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
+-from starlette.datastructures import URL, FormData, URLPath
++from starlette.datastructures import URL, URLPath
+ from starlette.exceptions import HTTPException
+ from starlette.requests import Request
+ from starlette.responses import (
+@@ -449,7 +449,7 @@ def get_request_handler(
+ 
+         # Read body and auto-close files
+         try:
+-            body: Any = None
++            body: Any = Undefined
+             if body_field:
+                 if is_body_form:
+                     body = await request.form()
+@@ -469,7 +469,7 @@ def get_request_handler(
+                                 subtype = message.get_content_subtype()
+                                 if subtype == "json" or subtype.endswith("+json"):
+                                     json_body = await request.json()
+-                        if json_body != Undefined:
++                        if json_body is not Undefined:
+                             body = json_body
+                         else:
+                             body = body_bytes
+@@ -499,7 +499,7 @@ def get_request_handler(
+             raise http_error from e
+ 
+         if telemetry_data is not None:
+-            telemetry_data.body = body
++            telemetry_data.body = None if body is Undefined else body
+ 
+         # Solve dependencies and run path operation function, auto-closing dependencies
+         errors: list[Any] = []
+@@ -511,7 +511,7 @@ def get_request_handler(
+             solved_result = await solve_dependencies(
+                 request=request,
+                 dependant=dependant,
+-                body=cast(dict[str, Any] | FormData | bytes | None, body),
++                body=body,
+                 dependency_overrides_provider=dependency_overrides_provider,
+                 async_exit_stack=async_exit_stack,
+                 embed_body_fields=embed_body_fields,
+@@ -790,7 +790,9 @@ def get_request_handler(
+                     response.headers.raw.extend(solved_result.response.headers.raw)
+         if errors:
+             validation_error = RequestValidationError(
+-                errors, body=body, endpoint_ctx=endpoint_ctx
++                errors,
++                body=None if body is Undefined else body,
++                endpoint_ctx=endpoint_ctx,
+             )
+             _validation_failed(validation_error)
+             raise validation_error
+diff --git a/tests/test_request_params/test_body/test_nullable_and_defaults.py b/tests/test_request_params/test_body/test_nullable_and_defaults.py
+index 4ab4396b..460dd421 100644
+--- a/tests/test_request_params/test_body/test_nullable_and_defaults.py
++++ b/tests/test_request_params/test_body/test_nullable_and_defaults.py
+@@ -1,7 +1,9 @@
+ from typing import Annotated
+ 
+ import pytest
+-from fastapi import Body, FastAPI
++from fastapi import Body, Depends, FastAPI, Request
++from fastapi.exceptions import RequestValidationError
++from fastapi.responses import JSONResponse
+ from fastapi.testclient import TestClient
+ from pydantic import BaseModel
+ 
+@@ -102,25 +104,11 @@ client = TestClient(app)
+ @pytest.mark.parametrize(
+     "path,fields_set",
+     [
+-        pytest.param(
+-            "/required",
+-            None,
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null is treated as missing for a required Body parameter",
+-                raises=AssertionError,
+-            ),
+-        ),
++        ("/required", None),
+         ("/required-model", ["value"]),
+         ("/none-default", None),
+         ("/none-default-model", ["value"]),
+-        pytest.param(
+-            "/non-null-default",
+-            None,
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null is replaced with the Body parameter default",
+-                raises=AssertionError,
+-            ),
+-        ),
++        ("/non-null-default", None),
+         ("/non-null-default-model", ["value"]),
+     ],
+ )
+@@ -192,19 +180,8 @@ def test_absent_bare_body_uses_default(path, expected):
+     "path",
+     [
+         "/bare-none-default",
+-        pytest.param(
+-            "/bare-required",
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null-body is treated as missing", raises=AssertionError
+-            ),
+-        ),
+-        pytest.param(
+-            "/bare-int-default",
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null-body is replaced with the default",
+-                raises=AssertionError,
+-            ),
+-        ),
++        "/bare-required",
++        "/bare-int-default",
+     ],
+ )
+ def test_explicit_null_bare_body(path):
+@@ -253,25 +230,9 @@ def test_omitted_non_nullable_field_uses_default(path):
+ @pytest.mark.parametrize(
+     "path,content,location",
+     [
+-        pytest.param(
+-            "/non-nullable-default",
+-            '{"value": null}',
+-            ["body", "value"],
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null is replaced with the Body parameter default",
+-                raises=AssertionError,
+-            ),
+-        ),
++        ("/non-nullable-default", '{"value": null}', ["body", "value"]),
+         ("/non-nullable-default-model", '{"value": null}', ["body", "value"]),
+-        pytest.param(
+-            "/bare-non-nullable-default",
+-            "null",
+-            ["body"],
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null-body is replaced with the default",
+-                raises=AssertionError,
+-            ),
+-        ),
++        ("/bare-non-nullable-default", "null", ["body"]),
+     ],
+ )
+ def test_explicit_null_for_non_nullable_body_with_default(path, content, location):
+@@ -285,3 +246,179 @@ def test_explicit_null_for_non_nullable_body_with_default(path, content, locatio
+     ] == [
+         ("int_type", location, None),
+     ]
++
++
++@pytest.mark.parametrize(
++    "path",
++    ["/required", "/none-default", "/non-null-default", "/non-nullable-default"],
++)
++def test_explicit_null_is_not_an_embedded_body_object(path):
++    response = client.post(
++        path, content="null", headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 422
++    assert response.json() == {
++        "detail": [
++            {
++                "type": "missing",
++                "loc": ["body", "value"],
++                "msg": "Field required",
++                "input": None,
++            }
++        ]
++    }
++
++
++def test_explicit_null_is_not_an_object_for_multiple_body_parameters():
++    app = FastAPI()
++
++    @app.post("/")
++    def read_values(
++        value: Annotated[int | None, Body()] = 10,
++        other: Annotated[int | None, Body()] = 20,
++    ):
++        return {"value": value, "other": other}
++
++    client = TestClient(app)
++    response = client.post(
++        "/", content="null", headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 422
++    assert [(error["type"], error["loc"]) for error in response.json()["detail"]] == [
++        ("missing", ["body", "value"]),
++        ("missing", ["body", "other"]),
++    ]
++
++    response = client.post("/")
++    assert response.status_code == 200
++    assert response.json() == {"value": 10, "other": 20}
++
++    response = client.post("/", json={})
++    assert response.status_code == 200
++    assert response.json() == {"value": 10, "other": 20}
++
++    response = client.post("/", json={"value": None, "other": None})
++    assert response.status_code == 200
++    assert response.json() == {"value": None, "other": None}
++
++
++@pytest.mark.parametrize(
++    "embed,null_content,missing_content",
++    [(False, "null", ""), (True, '{"value": null}', "{}")],
++)
++def test_explicit_null_does_not_call_default_factory(
++    embed, null_content, missing_content
++):
++    app = FastAPI()
++    calls = 0
++
++    def default_factory():
++        nonlocal calls
++        calls += 1
++        return "10"
++
++    @app.post("/")
++    def read_value(
++        value: Annotated[
++            int | None,
++            Body(embed=embed, default_factory=default_factory, validate_default=True),
++        ],
++    ):
++        return value
++
++    client = TestClient(app)
++    response = client.post(
++        "/", content=null_content, headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 200
++    assert response.json() is None
++    assert calls == 0
++
++    response = client.post(
++        "/", content=missing_content, headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 200
++    assert response.json() == 10
++    assert calls == 1
++
++
++def test_explicit_null_in_body_dependency_uses_alias():
++    app = FastAPI()
++
++    def dependency(value: Annotated[int | None, Body(alias="input")] = 10):
++        return value
++
++    @app.post("/")
++    def read_values(
++        value: Annotated[int | None, Depends(dependency)],
++        other: Annotated[int, Body()] = 20,
++    ):
++        return {"value": value, "other": other}
++
++    client = TestClient(app)
++    response = client.post("/", json={"input": None})
++    assert response.status_code == 200
++    assert response.json() == {"value": None, "other": 20}
++
++    response = client.post("/", json={})
++    assert response.status_code == 200
++    assert response.json() == {"value": 10, "other": 20}
++
++
++@pytest.mark.parametrize(
++    "embed,null_content,missing_content",
++    [(False, "null", ""), (True, '{"params": null}', "{}")],
++)
++def test_explicit_null_for_nullable_model_body(embed, null_content, missing_content):
++    app = FastAPI()
++
++    @app.post("/")
++    def read_model(
++        params: Annotated[RequiredModel | None, Body(embed=embed)] = RequiredModel(
++            value=10
++        ),
++    ):
++        return params
++
++    client = TestClient(app)
++    response = client.post(
++        "/", content=null_content, headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 200
++    assert response.json() is None
++
++    response = client.post(
++        "/", content=missing_content, headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 200
++    assert response.json() == {"value": 10}
++
++
++@pytest.mark.parametrize("content,error_type", [("", "missing"), ("null", "int_type")])
++def test_validation_error_body_for_missing_and_null(content, error_type):
++    app = FastAPI()
++
++    @app.post("/")
++    def read_value(value: Annotated[int, Body()]):
++        return value
++
++    @app.exception_handler(RequestValidationError)
++    def handle_error(request: Request, exc: RequestValidationError):
++        return JSONResponse(
++            status_code=422, content={"body": exc.body, "detail": exc.errors()}
++        )
++
++    client = TestClient(app)
++    response = client.post("/", json=1)
++    assert response.status_code == 200
++    assert response.json() == 1
++
++    response = client.post(
++        "/", content=content, headers={"content-type": "application/json"}
++    )
++    assert response.status_code == 422
++    assert response.json()["body"] is None
++    assert [
++        (error["type"], error["loc"], error["input"])
++        for error in response.json()["detail"]
++    ] == [(error_type, ["body"], None)]
+diff --git a/tests/test_request_params/test_default_validation.py b/tests/test_request_params/test_default_validation.py
+index a562e401..5648adf6 100644
+--- a/tests/test_request_params/test_default_validation.py
++++ b/tests/test_request_params/test_default_validation.py
+@@ -99,25 +99,12 @@ def test_explicit_value_equal_to_default_is_validated(parameter, path):
+ 
+ 
+ @pytest.mark.parametrize("default", [None, 10])
+-@pytest.mark.parametrize(
+-    "path",
+-    [
+-        pytest.param(
+-            "/parameter",
+-            marks=pytest.mark.xfail(
+-                reason="Explicit null is treated as missing for individual Body parameters",
+-                raises=AssertionError,
+-            ),
+-        ),
+-        "/model",
+-    ],
+-)
++@pytest.mark.parametrize("path", ["/parameter", "/model"])
+ def test_explicit_null_is_validated(default, path):
+     app = FastAPI()
+-    field = Body(embed=True)
+ 
+     @app.post("/parameter")
+-    def read_parameter(value: Annotated[ValidatedInt, field] = default):
++    def read_parameter(value: Annotated[ValidatedInt, Body(embed=True)] = default):
+         return value
+ 
+     class Model(BaseModel):
+@@ -134,9 +121,6 @@ def test_explicit_null_is_validated(default, path):
+ 
+ 
+ @pytest.mark.parametrize("default", [None, 10])
+-@pytest.mark.xfail(
+-    reason="Explicit null-body is treated as missing", raises=AssertionError
+-)
+ def test_explicit_null_body_is_validated(default):
+     app = FastAPI()
+ 
+diff --git a/tests/test_telemetry/test_data.py b/tests/test_telemetry/test_data.py
+index 7942b35e..4529be71 100644
+--- a/tests/test_telemetry/test_data.py
++++ b/tests/test_telemetry/test_data.py
+@@ -1,10 +1,11 @@
+ import asyncio
+ import gc
+ import weakref
++from typing import Annotated
+ 
+ import anyio
+ import pytest
+-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
++from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket
+ from fastapi.telemetry import get_telemetry_data
+ from fastapi.testclient import TestClient
+ from httpx import ASGITransport, AsyncClient
+@@ -425,3 +426,23 @@ def test_request_objects_are_not_exported():
+         finally:
+             tracer.shutdown()
+             logger.shutdown()
++
++
++@pytest.mark.parametrize("content,expected", [("", 10), ("null", None)])
++def test_missing_and_null_body_in_telemetry(telemetry, content, expected):
++    config, _, _ = telemetry
++    app = FastAPI(telemetry=config)
++
++    @app.post("/")
++    def read_value(value: Annotated[int | None, Body()] = 10):
++        data = get_telemetry_data()
++        assert data is not None
++        assert data.body is None
++        return value
++
++    with TestClient(app) as client:
++        response = client.post(
++            "/", content=content, headers={"content-type": "application/json"}
++        )
++    assert response.status_code == 200
++    assert response.json() == expected
