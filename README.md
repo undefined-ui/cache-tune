@@ -5,15 +5,28 @@ and the agent does the same work.
 
 ## Results
 
-One test: Claude Code with `--model sonnet` reviewed 5 merged fastapi PRs, 2 rounds per setup.
+One test: Claude Code with `--model sonnet` reviewed 5 merged fastapi PRs, 2 rounds per setup, with no
+permission denials. Round 2 started more than an hour after round 1, so no PR reused its own cache. One
+baseline run was dropped because an invalid run minutes earlier had warmed its cache, so the "before"
+means cover 9 runs and the "after" means cover 10.
 
-| Metric | Before | After | Change |
-|---|---|---|---|
-| Cost per review | $0.1441 | $0.0732 | -49.2%, cheaper on all 5 PRs |
-| Cache writes per run | 24.1k tokens | 11.1k tokens | 73% of the saving |
-| Output tokens | | | -32% overall, partly from the fixed findings format; dropping the final summary alone saved 16% |
-| Duration | | | -42.8%, but noisy (ranges overlap), so unproven |
-| Quality | | | both setups found the same core issues on every PR |
+| Mean per review | Before | After | Change | Share of the saving |
+|---|---|---|---|---|
+| Cost | $0.1441 | $0.0732 | -49.2% | |
+| Cache writes | 24,084 tokens | 11,142 tokens | -53.7% | 73% |
+| Output | 3,667 tokens | 2,504 tokens | -31.7% | 16% |
+| Cache reads | 111,083 tokens | 35,783 tokens | -67.8% | 11% |
+| Duration | 50.1 s | 28.7 s | -42.8% | |
+| Turns | 4.1 | 3.7 | -10% | |
+
+- **Cost:** cheaper on all 5 PRs, and the cost ranges of the two setups did not overlap. The same PR on
+  the same setup varied by 23% on average before and by 8% after.
+- **Duration:** unproven. The ranges overlap on one PR, and one "before" run spent 100 s running pytest.
+  Without that run the cut is about 25%; the median fell by 37%.
+- **Output:** part of the drop comes from the fixed findings format, not only from dropping the summary.
+- **Quality held:** on every PR both setups found the same core issues, and each side's unique findings
+  varied from run to run. Neither side was clean: a false mypy claim on one PR came up in 3 of 4 runs,
+  one of them on the "after" side, and an "after" run's top finding on another PR was also false.
 
 What changed:
 
